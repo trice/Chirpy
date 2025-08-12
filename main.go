@@ -1,15 +1,15 @@
 package main
 
 import (
-	"net/http"
+    "net/http"
 )
 
 func main() {
-	serveMux := http.NewServeMux()
-	server := http.Server {
-		Handler: serveMux,
-		Addr: ":8080",
-	}
-	
-	server.ListenAndServe()
+    serveMux := http.NewServeMux()
+    server := http.Server {
+        Handler: serveMux,
+        Addr: ":8080",
+    }
+
+    server.ListenAndServe()
 }
