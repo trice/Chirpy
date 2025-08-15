@@ -45,9 +45,9 @@ func main() {
     }
     serveMux.Handle("/app/", http.StripPrefix("/app",
         theCounter.MiddlewareMetricsInc(http.FileServer(http.Dir(".")))))
-    serveMux.HandleFunc("/healthz", HandleHealthz)
-    serveMux.HandleFunc("/metrics", theCounter.GetHits)
-    serveMux.HandleFunc("/reset", theCounter.resetHits)
+    serveMux.HandleFunc("GET /healthz", HandleHealthz)
+    serveMux.HandleFunc("GET /metrics", theCounter.GetHits)
+    serveMux.HandleFunc("POST /reset", theCounter.resetHits)
 
     server.ListenAndServe()
 }
