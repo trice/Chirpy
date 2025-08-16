@@ -18,10 +18,16 @@ func (cfg *apiConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
 }
 
 func (cfg * apiConfig) GetHits(writer http.ResponseWriter, request *http.Request) {
-    writer.Header().Set("Content-Type", "text/plain; charset=utf-8") // normal header
+    htmlFormat := `<html>
+                      <body>
+                        <h1>Welcome, Chirpy Admin</h1>
+                        <p>Chirpy has been visited %d times!</p>
+                      </body>
+                    </html>`
+    writer.Header().Set("Content-Type", "text/html; charset=utf-8") // normal header
     writer.WriteHeader(http.StatusOK)
     hits := cfg.fileserverHits.Load()
-    message := fmt.Sprintf("Hits: %v", hits)
+    message := fmt.Sprintf(htmlFormat, hits)
     writer.Write([]byte(message))
 }
 
@@ -45,9 +51,9 @@ func main() {
     }
     serveMux.Handle("/app/", http.StripPrefix("/app",
         theCounter.MiddlewareMetricsInc(http.FileServer(http.Dir(".")))))
-    serveMux.HandleFunc("GET /healthz", HandleHealthz)
-    serveMux.HandleFunc("GET /metrics", theCounter.GetHits)
-    serveMux.HandleFunc("POST /reset", theCounter.resetHits)
+    serveMux.HandleFunc("GET /api/healthz", HandleHealthz)
+    serveMux.HandleFunc("GET /admin/metrics", theCounter.GetHits)
+    serveMux.HandleFunc("POST /admin/reset", theCounter.resetHits)
 
     server.ListenAndServe()
 }
