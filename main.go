@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync/atomic"
 )
@@ -54,6 +56,46 @@ func main() {
     serveMux.HandleFunc("GET /api/healthz", HandleHealthz)
     serveMux.HandleFunc("GET /admin/metrics", theCounter.GetHits)
     serveMux.HandleFunc("POST /admin/reset", theCounter.resetHits)
+    serveMux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
+        // decode the body to a struct and then check the length of the string
+        type body struct {
+            Body string `json:"body"`
+        }
+        data, err := io.ReadAll(r.Body)
+        if err != nil {
+            w.Header().Set("Content-Type", "application/json; charset=utf-8")
+            w.WriteHeader(400)
+            w.Write([]byte(`{"error":"something went wrong"}`))
+            return
+        }
 
+        rb := body{}
+        err = json.Unmarshal(data, &rb)
+        if err != nil {
+            w.Header().Set("Content-Type", "application/json; charset=utf-8")
+            w.WriteHeader(400)
+            w.Write([]byte(`{"error":"something went wrong"}`))
+            return
+        }
+
+        if len(rb.Body) > 140 {
+            w.Header().Set("Content-Type", "application/json; charset=utf-8")
+            w.WriteHeader(400)
+            w.Write([]byte(`{"error": "Chirp is too long"}`))
+            return
+        } else {
+            type respBod struct {
+                Valid bool `json:"valid"`
+            }
+            rbod := respBod {
+                Valid : true,
+            }
+            d, _ := json.Marshal(rbod)
+            w.Header().Set("Content-Type", "application/json; charset=utf-8")
+            w.WriteHeader(200)
+            w.Write(d)
+            return
+        }
+    })
     server.ListenAndServe()
 }
