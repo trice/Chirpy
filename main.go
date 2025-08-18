@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync/atomic"
 )
 
@@ -43,6 +44,18 @@ func HandleHealthz(writer http.ResponseWriter, request *http.Request)  {
     writer.Write([]byte("OK"))
 }
 
+func scrubMessage(message string) string  {
+    tmpWords := strings.Split(message, " ")
+    for i, word := range tmpWords {
+        tmpWord := strings.ToLower(word)
+        switch tmpWord {
+        case "kerfuffle", "sharbert", "fornax":
+            tmpWords[i] = "****"
+        default:
+        }
+    }
+    return strings.Join(tmpWords, " ")
+}
 
 func main() {
     theCounter := apiConfig{}
@@ -78,6 +91,8 @@ func main() {
             return
         }
 
+        rb.Body = scrubMessage(rb.Body)
+
         if len(rb.Body) > 140 {
             w.Header().Set("Content-Type", "application/json; charset=utf-8")
             w.WriteHeader(400)
@@ -85,10 +100,10 @@ func main() {
             return
         } else {
             type respBod struct {
-                Valid bool `json:"valid"`
+                CleanedBody string `json:"cleaned_body"`
             }
             rbod := respBod {
-                Valid : true,
+                CleanedBody: rb.Body,
             }
             d, _ := json.Marshal(rbod)
             w.Header().Set("Content-Type", "application/json; charset=utf-8")
