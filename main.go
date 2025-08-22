@@ -18,6 +18,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
     queries *database.Queries
+    platform string
 }
 
 func (cfg *apiConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
@@ -41,8 +42,49 @@ func (cfg * apiConfig) GetHits(writer http.ResponseWriter, request *http.Request
     writer.Write([]byte(message))
 }
 
+func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Request) {
+    // decode the body to a struct and then check the length of the string
+    type body struct {
+        Email string `json:"email"`
+    }
+    data, err := io.ReadAll(request.Body)
+    if err != nil {
+        writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+        writer.WriteHeader(400)
+        writer.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    rb := body{}
+    err = json.Unmarshal(data, &rb)
+    if err != nil {
+        writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+        writer.WriteHeader(400)
+        writer.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+    user, err := cfg.queries.CreateUser(request.Context(), rb.Email)
+    if err != nil {
+        writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+        writer.WriteHeader(400)
+        writer.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    d, _ := json.Marshal(user)
+    writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+    writer.WriteHeader(http.StatusCreated)
+    writer.Write(d)
+}
+
 func (cfg * apiConfig) resetHits(writer http.ResponseWriter, request *http.Request) {
     cfg.fileserverHits.Store(0)
+    if cfg.platform == "dev" {
+        cfg.queries.DeleteUser(request.Context())
+    } else {
+        writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        writer.WriteHeader(http.StatusForbidden)
+    }
 }
 
 func HandleHealthz(writer http.ResponseWriter, request *http.Request)  {
@@ -67,6 +109,8 @@ func scrubMessage(message string) string  {
 func main() {
     godotenv.Load()
     dbURL := os.Getenv("DB_URL")
+    platform := os.Getenv("PLATFORM")
+
     db, err := sql.Open("postgres", dbURL)
     if err != nil {
         fmt.Printf("database open failed")
@@ -76,15 +120,20 @@ func main() {
 
     theCounter := apiConfig{}
     theCounter.queries = dbQueries
+    theCounter.platform = platform
+
     serveMux := http.NewServeMux()
     server := http.Server {
         Handler: serveMux,
         Addr: ":8080",
     }
+
     serveMux.Handle("/app/", http.StripPrefix("/app",
         theCounter.MiddlewareMetricsInc(http.FileServer(http.Dir(".")))))
+
     serveMux.HandleFunc("GET /api/healthz", HandleHealthz)
     serveMux.HandleFunc("GET /admin/metrics", theCounter.GetHits)
+    serveMux.HandleFunc("POST /api/users", theCounter.createUser)
     serveMux.HandleFunc("POST /admin/reset", theCounter.resetHits)
     serveMux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
         // decode the body to a struct and then check the length of the string
