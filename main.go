@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/trice/Chirpy/internal/database"
@@ -50,7 +51,7 @@ func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Requ
     data, err := io.ReadAll(request.Body)
     if err != nil {
         writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-        writer.WriteHeader(400)
+        writer.WriteHeader(http.StatusBadRequest)
         writer.Write([]byte(`{"error":"something went wrong"}`))
         return
     }
@@ -59,14 +60,14 @@ func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Requ
     err = json.Unmarshal(data, &rb)
     if err != nil {
         writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-        writer.WriteHeader(400)
+        writer.WriteHeader(http.StatusBadRequest)
         writer.Write([]byte(`{"error":"something went wrong"}`))
         return
     }
     user, err := cfg.queries.CreateUser(request.Context(), rb.Email)
     if err != nil {
         writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-        writer.WriteHeader(400)
+        writer.WriteHeader(http.StatusBadRequest)
         writer.Write([]byte(`{"error":"something went wrong"}`))
         return
     }
@@ -84,6 +85,57 @@ func (cfg * apiConfig) resetHits(writer http.ResponseWriter, request *http.Reque
     } else {
         writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
         writer.WriteHeader(http.StatusForbidden)
+    }
+}
+
+func (cfg * apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
+    // decode the body to a struct and then check the length of the string
+    type body struct {
+        Body string `json:"body"`
+        UserId uuid.UUID `json:"user_id"`
+    }
+
+    data, err := io.ReadAll(r.Body)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    rb := body{}
+    err = json.Unmarshal(data, &rb)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    rb.Body = scrubMessage(rb.Body)
+
+    if len(rb.Body) > 140 {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error": "Chirp is too long"}`))
+        return
+    } else {
+        newChirp := database.CreateChirpParams {
+            Body: rb.Body,
+            UserID: rb.UserId,
+        }
+        dbResult, err := cfg.queries.CreateChirp(r.Context(), newChirp)
+        if err != nil {
+            w.Header().Set("Content-Type", "application/json; charset=utf-8")
+            w.WriteHeader(http.StatusBadRequest)
+            w.Write([]byte(`{"error":"something went wrong"}`))
+            return
+        }
+        d, _ := json.Marshal(dbResult)
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusCreated)
+        w.Write(d)
+        return
     }
 }
 
@@ -135,48 +187,7 @@ func main() {
     serveMux.HandleFunc("GET /admin/metrics", theCounter.GetHits)
     serveMux.HandleFunc("POST /api/users", theCounter.createUser)
     serveMux.HandleFunc("POST /admin/reset", theCounter.resetHits)
-    serveMux.HandleFunc("POST /api/validate_chirp", func(w http.ResponseWriter, r *http.Request) {
-        // decode the body to a struct and then check the length of the string
-        type body struct {
-            Body string `json:"body"`
-        }
-        data, err := io.ReadAll(r.Body)
-        if err != nil {
-            w.Header().Set("Content-Type", "application/json; charset=utf-8")
-            w.WriteHeader(400)
-            w.Write([]byte(`{"error":"something went wrong"}`))
-            return
-        }
+    serveMux.HandleFunc("POST /api/chirps", theCounter.createChirp)
 
-        rb := body{}
-        err = json.Unmarshal(data, &rb)
-        if err != nil {
-            w.Header().Set("Content-Type", "application/json; charset=utf-8")
-            w.WriteHeader(400)
-            w.Write([]byte(`{"error":"something went wrong"}`))
-            return
-        }
-
-        rb.Body = scrubMessage(rb.Body)
-
-        if len(rb.Body) > 140 {
-            w.Header().Set("Content-Type", "application/json; charset=utf-8")
-            w.WriteHeader(400)
-            w.Write([]byte(`{"error": "Chirp is too long"}`))
-            return
-        } else {
-            type respBod struct {
-                CleanedBody string `json:"cleaned_body"`
-            }
-            rbod := respBod {
-                CleanedBody: rb.Body,
-            }
-            d, _ := json.Marshal(rbod)
-            w.Header().Set("Content-Type", "application/json; charset=utf-8")
-            w.WriteHeader(200)
-            w.Write(d)
-            return
-        }
-    })
     server.ListenAndServe()
 }
