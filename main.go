@@ -151,6 +151,22 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request)  {
     w.Write(d)
 }
 
+func (cfg* apiConfig) getChirpBy(w http.ResponseWriter, r *http.Request)  {
+    var chirpId uuid.NullUUID
+    chirpId.UUID = uuid.MustParse(r.PathValue("chirpID"))
+    chirpId.Valid = true
+    chirpResult, err := cfg.queries.GetChirpById(r.Context(), chirpId)
+    if err != nil {
+        http.Error(w, "chirp not found", http.StatusNotFound)
+        return
+    }
+
+    d, _ := json.Marshal(chirpResult)
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusOK)
+    w.Write(d)
+}
+
 func HandleHealthz(writer http.ResponseWriter, request *http.Request)  {
     writer.Header().Set("Content-Type", "text/plain; charset=utf-8") // normal header
     writer.WriteHeader(http.StatusOK)
@@ -201,6 +217,7 @@ func main() {
     serveMux.HandleFunc("POST /admin/reset", theCounter.resetHits)
     serveMux.HandleFunc("POST /api/chirps", theCounter.createChirp)
     serveMux.HandleFunc("GET /api/chirps", theCounter.getChirps)
+    serveMux.HandleFunc("GET /api/chirps/{chirpID}", theCounter.getChirpBy)
 
     server.ListenAndServe()
 }
