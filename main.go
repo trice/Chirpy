@@ -139,6 +139,18 @@ func (cfg * apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
     }
 }
 
+func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request)  {
+    chirpsAscByCreate, err := cfg.queries.GetChirps(r.Context())
+    if err != nil {
+        http.Error(w, "Error reading chirps", http.StatusNotFound)
+    }
+
+    d, _ := json.Marshal(chirpsAscByCreate)
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusOK)
+    w.Write(d)
+}
+
 func HandleHealthz(writer http.ResponseWriter, request *http.Request)  {
     writer.Header().Set("Content-Type", "text/plain; charset=utf-8") // normal header
     writer.WriteHeader(http.StatusOK)
@@ -188,6 +200,7 @@ func main() {
     serveMux.HandleFunc("POST /api/users", theCounter.createUser)
     serveMux.HandleFunc("POST /admin/reset", theCounter.resetHits)
     serveMux.HandleFunc("POST /api/chirps", theCounter.createChirp)
+    serveMux.HandleFunc("GET /api/chirps", theCounter.getChirps)
 
     server.ListenAndServe()
 }
