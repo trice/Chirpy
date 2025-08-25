@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 	"github.com/trice/Chirpy/internal/database"
+    "github.com/trice/Chirpy/internal/auth"
 )
 
 type apiConfig struct {
@@ -46,6 +47,7 @@ func (cfg * apiConfig) GetHits(writer http.ResponseWriter, request *http.Request
 func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Request) {
     // decode the body to a struct and then check the length of the string
     type body struct {
+        Password string `json:"password"`
         Email string `json:"email"`
     }
     data, err := io.ReadAll(request.Body)
@@ -64,7 +66,19 @@ func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Requ
         writer.Write([]byte(`{"error":"something went wrong"}`))
         return
     }
-    user, err := cfg.queries.CreateUser(request.Context(), rb.Email)
+    hashPass, err := auth.HashPassword(rb.Password)
+    if err != nil {
+        writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+        writer.WriteHeader(http.StatusBadRequest)
+        writer.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    dbUserParams := database.CreateUserParams {
+        Email: rb.Email,
+        HashedPassword: hashPass,
+    }
+    user, err := cfg.queries.CreateUser(request.Context(), dbUserParams)
     if err != nil {
         writer.Header().Set("Content-Type", "application/json; charset=utf-8")
         writer.WriteHeader(http.StatusBadRequest)
@@ -167,6 +181,44 @@ func (cfg* apiConfig) getChirpBy(w http.ResponseWriter, r *http.Request)  {
     w.Write(d)
 }
 
+func (cfg* apiConfig) login(w http.ResponseWriter, r *http.Request)  {
+    type body struct {
+        Password string `json:"password"`
+        Email string `json:"email"`
+    }
+
+    data, err := io.ReadAll(r.Body)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    rb := body{}
+    err = json.Unmarshal(data, &rb)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    userRow, err := cfg.queries.GetUser(r.Context(), rb.Email)
+    err = auth.CheckPasswordHash(rb.Password, userRow.HashedPassword)
+    if err != nil {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    } else {
+
+        d, _ := json.Marshal(userRow)
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusOK)
+        w.Write(d)
+    }
+}
+
 func HandleHealthz(writer http.ResponseWriter, request *http.Request)  {
     writer.Header().Set("Content-Type", "text/plain; charset=utf-8") // normal header
     writer.WriteHeader(http.StatusOK)
@@ -218,6 +270,7 @@ func main() {
     serveMux.HandleFunc("POST /api/chirps", theCounter.createChirp)
     serveMux.HandleFunc("GET /api/chirps", theCounter.getChirps)
     serveMux.HandleFunc("GET /api/chirps/{chirpID}", theCounter.getChirpBy)
+    serveMux.HandleFunc("POST /api/login", theCounter.login)
 
     server.ListenAndServe()
 }
