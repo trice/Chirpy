@@ -203,12 +203,12 @@ func (cfg* apiConfig) login(w http.ResponseWriter, r *http.Request)  {
     type body struct {
         Password string `json:"password"`
         Email string `json:"email"`
-        ExpirationSeconds time.Duration `json:"expiration_in_seconds"`
     }
 
     type userReturn struct {
         database.User
         Token string `json:"token"`
+        RefreshToken string `json:"refresh_token"`
     }
 
     data, err := io.ReadAll(r.Body)
@@ -228,10 +228,6 @@ func (cfg* apiConfig) login(w http.ResponseWriter, r *http.Request)  {
         return
     }
 
-    if rb.ExpirationSeconds.Abs().Seconds() == 0 || rb.ExpirationSeconds.Abs().Seconds() > 3600 {
-        rb.ExpirationSeconds = time.Duration(3600) * time.Second
-    }
-
     userRow, err := cfg.queries.GetUser(r.Context(), rb.Email)
     err = auth.CheckPasswordHash(rb.Password, userRow.HashedPassword)
     if err != nil {
@@ -240,22 +236,76 @@ func (cfg* apiConfig) login(w http.ResponseWriter, r *http.Request)  {
         return
     }
 
-    tok, err := auth.MakeJWT(userRow.ID.UUID, cfg.tokenSecret, rb.ExpirationSeconds)
+    tok, err := auth.MakeJWT(userRow.ID.UUID, cfg.tokenSecret, time.Duration(3600) * time.Second)
     if err != nil {
         w.Header().Set("Content-Type", "text/plain; charset=utf-8")
         w.WriteHeader(http.StatusUnauthorized)
         return
     }
 
+    // ignoring error, it seems very rare that an error is possible
+    refTok, _ := auth.MakeRefreshToken()
+    nullTime := sql.NullTime {
+            Time: time.Now().Add(60*(24*time.Hour)),
+            Valid: true,
+    }
+
+    refTokDbParam := database.CreateRefreshTokenParams {
+        Token: refTok,
+        UserID: userRow.ID.UUID,
+        ExpiresAt: nullTime.Time,
+    }
+
+    // store the refresh token in the database
+    cfg.queries.CreateRefreshToken(r.Context(), refTokDbParam)
+
     user := userReturn {
         userRow,
         tok,
+        refTok,
     }
 
     d, _ := json.Marshal(user)
     w.Header().Set("Content-Type", "application/json; charset=utf-8")
     w.WriteHeader(http.StatusOK)
     w.Write(d)
+}
+
+func (cfg *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
+    bt, _ := auth.GetBearerToken(r.Header)
+
+    refreshTokenRow, err := cfg.queries.GetUserFromRefreshToken(r.Context(), bt)
+    if err != nil || refreshTokenRow.ExpiresAt.Before(time.Now()) || refreshTokenRow.RevokedAt.Valid == true {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+
+    authToken, err := auth.MakeJWT(refreshTokenRow.UserID, cfg.tokenSecret, time.Duration(3600)*time.Second)
+    if err != nil {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+    type out struct {
+        Token string `json:"token"`
+    }
+    outToken := out {
+        authToken,
+    }
+
+    d, _ := json.Marshal(outToken)
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusOK)
+    w.Write(d)
+}
+
+func (cfg *apiConfig) revokeRefreshToken(w http.ResponseWriter, r *http.Request) {
+    bt, _ := auth.GetBearerToken(r.Header)
+    cfg.queries.RevokeRefreshToken(r.Context(), bt)
+
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusNoContent)
 }
 
 func HandleHealthz(writer http.ResponseWriter, request *http.Request)  {
@@ -312,6 +362,7 @@ func main() {
     serveMux.HandleFunc("GET /api/chirps", theCounter.getChirps)
     serveMux.HandleFunc("GET /api/chirps/{chirpID}", theCounter.getChirpBy)
     serveMux.HandleFunc("POST /api/login", theCounter.login)
-
+    serveMux.HandleFunc("POST /api/refresh", theCounter.refreshToken)
+    serveMux.HandleFunc("POST /api/revoke", theCounter.revokeRefreshToken)
     server.ListenAndServe()
 }
