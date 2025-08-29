@@ -9,18 +9,20 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
+	"github.com/trice/Chirpy/internal/auth"
 	"github.com/trice/Chirpy/internal/database"
-    "github.com/trice/Chirpy/internal/auth"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
     queries *database.Queries
     platform string
+    tokenSecret string
 }
 
 func (cfg *apiConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
@@ -66,6 +68,7 @@ func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Requ
         writer.Write([]byte(`{"error":"something went wrong"}`))
         return
     }
+
     hashPass, err := auth.HashPassword(rb.Password)
     if err != nil {
         writer.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -78,6 +81,7 @@ func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Requ
         Email: rb.Email,
         HashedPassword: hashPass,
     }
+
     user, err := cfg.queries.CreateUser(request.Context(), dbUserParams)
     if err != nil {
         writer.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -108,6 +112,19 @@ func (cfg * apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
         Body string `json:"body"`
         UserId uuid.UUID `json:"user_id"`
     }
+    jwt, err := auth.GetBearerToken(r.Header)
+    if err != nil {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+
+    validUuid, err := auth.ValidateJWT(jwt, cfg.tokenSecret)
+    if err != nil {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
 
     data, err := io.ReadAll(r.Body)
     if err != nil {
@@ -133,24 +150,25 @@ func (cfg * apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusBadRequest)
         w.Write([]byte(`{"error": "Chirp is too long"}`))
         return
-    } else {
-        newChirp := database.CreateChirpParams {
-            Body: rb.Body,
-            UserID: rb.UserId,
-        }
-        dbResult, err := cfg.queries.CreateChirp(r.Context(), newChirp)
-        if err != nil {
-            w.Header().Set("Content-Type", "application/json; charset=utf-8")
-            w.WriteHeader(http.StatusBadRequest)
-            w.Write([]byte(`{"error":"something went wrong"}`))
-            return
-        }
-        d, _ := json.Marshal(dbResult)
+    }
+
+    newChirp := database.CreateChirpParams {
+        Body: rb.Body,
+        UserID: validUuid,
+    }
+
+    dbResult, err := cfg.queries.CreateChirp(r.Context(), newChirp)
+    if err != nil {
         w.Header().Set("Content-Type", "application/json; charset=utf-8")
-        w.WriteHeader(http.StatusCreated)
-        w.Write(d)
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
         return
     }
+
+    d, _ := json.Marshal(dbResult)
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusCreated)
+    w.Write(d)
 }
 
 func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request)  {
@@ -185,6 +203,12 @@ func (cfg* apiConfig) login(w http.ResponseWriter, r *http.Request)  {
     type body struct {
         Password string `json:"password"`
         Email string `json:"email"`
+        ExpirationSeconds time.Duration `json:"expiration_in_seconds"`
+    }
+
+    type userReturn struct {
+        database.User
+        Token string `json:"token"`
     }
 
     data, err := io.ReadAll(r.Body)
@@ -204,19 +228,34 @@ func (cfg* apiConfig) login(w http.ResponseWriter, r *http.Request)  {
         return
     }
 
+    if rb.ExpirationSeconds.Abs().Seconds() == 0 || rb.ExpirationSeconds.Abs().Seconds() > 3600 {
+        rb.ExpirationSeconds = time.Duration(3600) * time.Second
+    }
+
     userRow, err := cfg.queries.GetUser(r.Context(), rb.Email)
     err = auth.CheckPasswordHash(rb.Password, userRow.HashedPassword)
     if err != nil {
         w.Header().Set("Content-Type", "text/plain; charset=utf-8")
         w.WriteHeader(http.StatusUnauthorized)
         return
-    } else {
-
-        d, _ := json.Marshal(userRow)
-        w.Header().Set("Content-Type", "application/json; charset=utf-8")
-        w.WriteHeader(http.StatusOK)
-        w.Write(d)
     }
+
+    tok, err := auth.MakeJWT(userRow.ID.UUID, cfg.tokenSecret, rb.ExpirationSeconds)
+    if err != nil {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+
+    user := userReturn {
+        userRow,
+        tok,
+    }
+
+    d, _ := json.Marshal(user)
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusOK)
+    w.Write(d)
 }
 
 func HandleHealthz(writer http.ResponseWriter, request *http.Request)  {
@@ -242,6 +281,7 @@ func main() {
     godotenv.Load()
     dbURL := os.Getenv("DB_URL")
     platform := os.Getenv("PLATFORM")
+    sec := os.Getenv("SECRET")
 
     db, err := sql.Open("postgres", dbURL)
     if err != nil {
@@ -253,6 +293,7 @@ func main() {
     theCounter := apiConfig{}
     theCounter.queries = dbQueries
     theCounter.platform = platform
+    theCounter.tokenSecret = sec
 
     serveMux := http.NewServeMux()
     server := http.Server {
