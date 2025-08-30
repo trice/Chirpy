@@ -73,7 +73,12 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 }
 
 func GetBearerToken(headers http.Header) (string, error) {
-    bt := headers.Values("Authorization")[0][7:]
+    tmp := headers.Values("Authorization")
+    if len(tmp) == 0 {
+       return "", fmt.Errorf("Auth no provided")
+    }
+
+    bt := tmp[0][7:]
     if len(bt) == 0 {
         return "", fmt.Errorf("No token found")
     }

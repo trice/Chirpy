@@ -96,6 +96,59 @@ func (cfg * apiConfig) createUser(writer http.ResponseWriter, request *http.Requ
     writer.Write(d)
 }
 
+func (cfg * apiConfig) updateUser(w http.ResponseWriter, r *http.Request) {
+    validUuid := validateAccessToken(r, w, cfg)
+    if validUuid == (uuid.UUID{}) {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+
+    type body struct {
+        Password string `json:"password"`
+        Email string `json:"email"`
+    }
+    data, err := io.ReadAll(r.Body)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    rb := body{}
+    err = json.Unmarshal(data, &rb)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    hashPass, err := auth.HashPassword(rb.Password)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    updateParams := database.UpdateUserParams {
+        Email: rb.Email,
+        HashedPassword: hashPass,
+        ID: uuid.NullUUID{ UUID: validUuid, Valid: true, },
+    }
+    updateUser, err := cfg.queries.UpdateUser(r.Context(), updateParams)
+    if err != nil {
+
+    }
+
+    d, _ := json.Marshal(updateUser)
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusOK)
+    w.Write(d)
+}
+
 func (cfg * apiConfig) resetHits(writer http.ResponseWriter, request *http.Request) {
     cfg.fileserverHits.Store(0)
     if cfg.platform == "dev" {
@@ -112,17 +165,11 @@ func (cfg * apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
         Body string `json:"body"`
         UserId uuid.UUID `json:"user_id"`
     }
-    jwt, err := auth.GetBearerToken(r.Header)
-    if err != nil {
-        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-        w.WriteHeader(http.StatusUnauthorized)
-        return
-    }
 
-    validUuid, err := auth.ValidateJWT(jwt, cfg.tokenSecret)
-    if err != nil {
-        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-        w.WriteHeader(http.StatusUnauthorized)
+    validUuid := validateAccessToken(r, w, cfg)
+    if validUuid == (uuid.UUID{}) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
         return
     }
 
@@ -169,6 +216,21 @@ func (cfg * apiConfig) createChirp(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json; charset=utf-8")
     w.WriteHeader(http.StatusCreated)
     w.Write(d)
+}
+
+// check of the Access Token is valide and if so return the UUID of the user.
+func validateAccessToken(r *http.Request, w http.ResponseWriter, cfg *apiConfig) (uuid.UUID) {
+	jwt, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		return uuid.UUID{}
+	}
+
+	validUuid, err := auth.ValidateJWT(jwt, cfg.tokenSecret)
+	if err != nil {
+		return uuid.UUID{}
+	}
+
+	return validUuid
 }
 
 func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request)  {
@@ -364,5 +426,6 @@ func main() {
     serveMux.HandleFunc("POST /api/login", theCounter.login)
     serveMux.HandleFunc("POST /api/refresh", theCounter.refreshToken)
     serveMux.HandleFunc("POST /api/revoke", theCounter.revokeRefreshToken)
+    serveMux.HandleFunc("PUT /api/users", theCounter.updateUser)
     server.ListenAndServe()
 }
