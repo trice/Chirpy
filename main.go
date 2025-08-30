@@ -261,6 +261,37 @@ func (cfg* apiConfig) getChirpBy(w http.ResponseWriter, r *http.Request)  {
     w.Write(d)
 }
 
+func (cfg *apiConfig) deleteChirp(w http.ResponseWriter, r *http.Request) {
+    validUuid := validateAccessToken(r, w, cfg)
+    if validUuid == (uuid.UUID{}) {
+        w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+
+    var chirpId uuid.NullUUID
+    chirpId.UUID = uuid.MustParse(r.PathValue("chirpID"))
+    chirpId.Valid = true
+    chirpResult, err := cfg.queries.GetChirpById(r.Context(), chirpId)
+    if err != nil {
+        http.Error(w, "chirp not found", http.StatusNotFound)
+        return
+    }
+
+    if chirpResult.UserID != validUuid {
+        http.Error(w, "that is not yours", http.StatusForbidden)
+        return
+    }
+
+    deleteParams := database.DeleteChirpForUserParams {
+        ID: chirpId,
+        UserID: validUuid,
+    }
+    cfg.queries.DeleteChirpForUser(r.Context(), deleteParams)
+    w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+    w.WriteHeader(http.StatusNoContent)
+}
+
 func (cfg* apiConfig) login(w http.ResponseWriter, r *http.Request)  {
     type body struct {
         Password string `json:"password"`
@@ -427,5 +458,6 @@ func main() {
     serveMux.HandleFunc("POST /api/refresh", theCounter.refreshToken)
     serveMux.HandleFunc("POST /api/revoke", theCounter.revokeRefreshToken)
     serveMux.HandleFunc("PUT /api/users", theCounter.updateUser)
+    serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", theCounter.deleteChirp)
     server.ListenAndServe()
 }
