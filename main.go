@@ -23,6 +23,7 @@ type apiConfig struct {
     queries *database.Queries
     platform string
     tokenSecret string
+    polkaKey string
 }
 
 func (cfg *apiConfig) MiddlewareMetricsInc(next http.Handler) http.Handler {
@@ -234,12 +235,21 @@ func validateAccessToken(r *http.Request, w http.ResponseWriter, cfg *apiConfig)
 }
 
 func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request)  {
-    chirpsAscByCreate, err := cfg.queries.GetChirps(r.Context())
+    author := r.URL.Query().Get("author_id")
+    var chirpAscByCreate []database.Chirp
+    var err error
+    if len(author) != 0 {
+        authorId := uuid.MustParse(author)
+        chirpAscByCreate, err = cfg.queries.GetChirpsByAuthor(r.Context(), authorId)
+    } else {
+        chirpAscByCreate, err = cfg.queries.GetChirps(r.Context())
+    }
+
     if err != nil {
         http.Error(w, "Error reading chirps", http.StatusNotFound)
     }
 
-    d, _ := json.Marshal(chirpsAscByCreate)
+    d, _ := json.Marshal(chirpAscByCreate)
     w.Header().Set("Content-Type", "application/json; charset=utf-8")
     w.WriteHeader(http.StatusOK)
     w.Write(d)
@@ -403,6 +413,13 @@ func (cfg *apiConfig) chirpyRedPayment(w http.ResponseWriter, r *http.Request) {
         Data data `json:"data"`
     }
 
+    polkaKey, err := auth.GetBearerToken(r.Header)
+    if err != nil || polkaKey != cfg.polkaKey {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusUnauthorized)
+        return
+    }
+
     bodyData, err := io.ReadAll(r.Body)
     if err != nil {
         w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -476,6 +493,7 @@ func main() {
     dbURL := os.Getenv("DB_URL")
     platform := os.Getenv("PLATFORM")
     sec := os.Getenv("SECRET")
+    pk := os.Getenv("POLKA_KEY")
 
     db, err := sql.Open("postgres", dbURL)
     if err != nil {
@@ -488,6 +506,7 @@ func main() {
     theCounter.queries = dbQueries
     theCounter.platform = platform
     theCounter.tokenSecret = sec
+    theCounter.polkaKey = pk
 
     serveMux := http.NewServeMux()
     server := http.Server {
