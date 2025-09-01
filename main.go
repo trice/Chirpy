@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -236,6 +237,8 @@ func validateAccessToken(r *http.Request, w http.ResponseWriter, cfg *apiConfig)
 
 func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request)  {
     author := r.URL.Query().Get("author_id")
+    sortOrder := r.URL.Query().Get("sort")
+
     var chirpAscByCreate []database.Chirp
     var err error
     if len(author) != 0 {
@@ -247,6 +250,12 @@ func (cfg *apiConfig) getChirps(w http.ResponseWriter, r *http.Request)  {
 
     if err != nil {
         http.Error(w, "Error reading chirps", http.StatusNotFound)
+    }
+
+    if sortOrder == "desc" {
+        sort.Slice(chirpAscByCreate, func(i, j int) bool {
+            return chirpAscByCreate[i].CreatedAt.After(chirpAscByCreate[j].CreatedAt)
+        })
     }
 
     d, _ := json.Marshal(chirpAscByCreate)
