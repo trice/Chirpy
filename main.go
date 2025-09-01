@@ -393,6 +393,57 @@ func (cfg *apiConfig) refreshToken(w http.ResponseWriter, r *http.Request) {
     w.Write(d)
 }
 
+func (cfg *apiConfig) chirpyRedPayment(w http.ResponseWriter, r *http.Request) {
+    type data struct {
+        UserId uuid.UUID `json:"user_id"`
+    }
+
+    type body struct {
+        Event string `json:"event"`
+        Data data `json:"data"`
+    }
+
+    bodyData, err := io.ReadAll(r.Body)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    rb := body{}
+    err = json.Unmarshal(bodyData, &rb)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write([]byte(`{"error":"something went wrong"}`))
+        return
+    }
+
+    if rb.Event != "user.upgraded" {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusNoContent)
+        return
+    }
+
+    param := database.UpdateRedParams {
+        ID: uuid.NullUUID{ UUID: rb.Data.UserId, Valid: true, },
+        IsChirpyRed: true,
+    }
+
+    x, err := cfg.queries.UpdateRed(r.Context(), param)
+    if err != nil {
+        w.Header().Set("Content-Type", "application/json; charset=utf-8")
+        w.WriteHeader(http.StatusNotFound)
+        return
+    }
+
+    fmt.Println(x)
+
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    w.WriteHeader(http.StatusNoContent)
+}
+
 func (cfg *apiConfig) revokeRefreshToken(w http.ResponseWriter, r *http.Request) {
     bt, _ := auth.GetBearerToken(r.Header)
     cfg.queries.RevokeRefreshToken(r.Context(), bt)
@@ -459,5 +510,6 @@ func main() {
     serveMux.HandleFunc("POST /api/revoke", theCounter.revokeRefreshToken)
     serveMux.HandleFunc("PUT /api/users", theCounter.updateUser)
     serveMux.HandleFunc("DELETE /api/chirps/{chirpID}", theCounter.deleteChirp)
+    serveMux.HandleFunc("POST /api/polka/webhooks", theCounter.chirpyRedPayment)
     server.ListenAndServe()
 }
